@@ -96,6 +96,17 @@ function statusStyles(status: GroupStatus["status"]) {
   };
 }
 
+async function fetchJson(url: string, options: RequestInit = {}) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+
+  if (!data.success) {
+    throw new Error(data.message || "Request failed");
+  }
+
+  return data;
+}
+
 export default function App() {
   const [page, setPage] = useState<"login" | "groups" | "entry">("login");
 
@@ -113,6 +124,9 @@ export default function App() {
   const [studentsByGroup, setStudentsByGroup] = useState<Record<string, Student[]>>({});
 
   const [scoresByGroup, setScoresByGroup] = useState<Record<string, Record<string, ScoreRecord>>>({});
+  const [rowSaveStateByGroup, setRowSaveStateByGroup] = useState<Record<string, Record<string, string>>>({});
+  const [saveTimers, setSaveTimers] = useState<Record<string, number>>({});
+
   const [loadingClasses, setLoadingClasses] = useState(false);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [loadingStudents, setLoadingStudents] = useState(false);
@@ -125,112 +139,217 @@ export default function App() {
     stations.find((x) => x.id === station) || stations[1];
 
   const currentScores = scoresByGroup[selectedGroup] || {};
+  const currentRowSaveState = rowSaveStateByGroup[selectedGroup] || {};
 
   useEffect(() => {
     if (page !== "groups") return;
 
-    setLoadingClasses(true);
-    setError("");
+    const loadClasses = async () => {
+      try {
+        setLoadingClasses(true);
+        setError("");
 
-    fetch(`${API_BASE}?action=getClasses`)
-      .then((r) => r.json())
-      .then((data) => {
+        const data = await fetchJson(`${API_BASE}?action=getClasses`);
         const nextClasses = data.classes || [];
+
         setClasses(nextClasses);
 
         if (!selectedClass && nextClasses.length > 0) {
           setSelectedClass(nextClasses[0]);
         }
-      })
-      .catch((err) => {
+      } catch (err) {
         console.error("Failed to load classes:", err);
         setError("Failed to load classes");
-      })
-      .finally(() => {
+      } finally {
         setLoadingClasses(false);
-      });
+      }
+    };
+
+    void loadClasses();
   }, [page, selectedClass]);
 
   useEffect(() => {
     if (!selectedClass) return;
 
-    setLoadingGroups(true);
-    setError("");
+    const loadGroupsAndStatuses = async () => {
+      try {
+        setLoadingGroups(true);
+        setError("");
 
-    fetch(`${API_BASE}?action=getGroups&className=${encodeURIComponent(selectedClass)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        const nextGroups = data.groups || [];
+        const groupsData = await fetchJson(
+          `${API_BASE}?action=getGroups&className=${encodeURIComponent(selectedClass)}`
+        );
+
+        const nextGroups = groupsData.groups || [];
         setGroups(nextGroups);
 
-        return fetch(
-          `${API_BASE}?action=getGroupStatuses&className=${encodeURIComponent(
-            selectedClass
-          )}&station=${encodeURIComponent(currentStation.label)}`
-        )
-          .then((r) => r.json())
-          .then((statusData) => {
-            const map: Record<string, GroupStatus["status"]> = {};
-            (statusData.statuses || []).forEach((item: GroupStatus) => {
-              map[item.group] = item.status;
-            });
-            setGroupStatuses(map);
-          })
-          .catch((err) => {
-            console.error("Failed to load group statuses:", err);
-          })
-          .finally(() => {
-            // Preload students in background after groups are known
-            nextGroups.forEach((group: string) => {
-              if (studentsByGroup[group]) return;
+        try {
+          const statusesData = await fetchJson(
+            `${API_BASE}?action=getGroupStatuses&className=${encodeURIComponent(
+              selectedClass
+            )}&station=${encodeURIComponent(currentStation.label)}`
+          );
 
-              fetch(
-                `${API_BASE}?action=getGroupStudents&className=${encodeURIComponent(
-                  selectedClass
-                )}&group=${encodeURIComponent(group)}`
-              )
-                .then((r) => r.json())
-                .then((groupData) => {
-                  setStudentsByGroup((prev) => {
-                    if (prev[group]) return prev;
-                    return { ...prev, [group]: groupData.students || [] };
-                  });
-                })
-                .catch((err) => {
-                  console.error(`Failed to preload ${group}:`, err);
-                });
-            });
+          const map: Record<string, GroupStatus["status"]> = {};
+          (statusesData.statuses || []).forEach((item: GroupStatus) => {
+            map[item.group] = item.status;
           });
-      })
-      .catch((err) => {
+          setGroupStatuses(map);
+        } catch (statusErr) {
+          console.error("Failed to load group statuses:", statusErr);
+        }
+
+        nextGroups.forEach((group: string) => {
+          if (studentsByGroup[group]) return;
+
+          fetchJson(
+            `${API_BASE}?action=getGroupStudents&className=${encodeURIComponent(
+              selectedClass
+            )}&group=${encodeURIComponent(group)}`
+          )
+            .then((groupData) => {
+              setStudentsByGroup((prev) => {
+                if (prev[group]) return prev;
+                return { ...prev, [group]: groupData.students || [] };
+              });
+            })
+            .catch((preloadErr) => {
+              console.error(`Failed to preload ${group}:`, preloadErr);
+            });
+        });
+      } catch (err) {
         console.error("Failed to load groups:", err);
         setError("Failed to load groups");
-      })
-      .finally(() => {
+      } finally {
         setLoadingGroups(false);
-      });
+      }
+    };
+
+    void loadGroupsAndStatuses();
   }, [selectedClass, currentStation.label]);
 
   useEffect(() => {
     if (!selectedGroup) return;
+
     if (studentsByGroup[selectedGroup]) {
       setStudents(studentsByGroup[selectedGroup]);
       setLoadingStudents(false);
     }
   }, [selectedGroup, studentsByGroup]);
 
-  const enteredCount = useMemo(() => {
-    return students.filter((s) => {
-      const rec = currentScores[s.id] || { a1: "", a2: "" };
-      return rec.a1 !== "" || rec.a2 !== "";
+  const completionCount = useMemo(() => {
+    return students.filter((student) => {
+      const record = currentScores[student.id] || { a1: "", a2: "" };
+      return record.a1 !== "" || record.a2 !== "";
     }).length;
   }, [students, currentScores]);
 
-  const loadGroup = (group: string) => {
-    setError("");
-    setMessage("");
+  const hasData = useMemo(() => {
+    return Object.values(currentScores).some(
+      (record) => record.a1 !== "" || record.a2 !== ""
+    );
+  }, [currentScores]);
+
+  const saveAttemptNow = async (groupKey: string, studentId: string, record: ScoreRecord) => {
+    try {
+      setRowSaveStateByGroup((prev) => ({
+        ...prev,
+        [groupKey]: {
+          ...(prev[groupKey] || {}),
+          [studentId]: "saving",
+        },
+      }));
+
+      await fetchJson(API_BASE, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain;charset=utf-8",
+        },
+        body: JSON.stringify({
+          action: "saveAttempt",
+          teacher,
+          station: currentStation.label,
+          className: selectedClass,
+          group: groupKey,
+          studentId,
+          attempt1: record.a1,
+          attempt2: record.a2,
+        }),
+      });
+
+      setRowSaveStateByGroup((prev) => ({
+        ...prev,
+        [groupKey]: {
+          ...(prev[groupKey] || {}),
+          [studentId]: "saved",
+        },
+      }));
+
+      setGroupStatuses((prev) => ({
+        ...prev,
+        [groupKey]: prev[groupKey] === "submitted" ? "submitted" : "in-progress",
+      }));
+    } catch (err) {
+      console.error("Save failed:", err);
+
+      setRowSaveStateByGroup((prev) => ({
+        ...prev,
+        [groupKey]: {
+          ...(prev[groupKey] || {}),
+          [studentId]: "error",
+        },
+      }));
+
+      setError("Save failed");
+    }
+  };
+
+  const handleAttemptChange = (studentId: string, key: keyof ScoreRecord, value: string) => {
+    const groupKey = selectedGroup;
+
+    const nextRecord = {
+      ...((scoresByGroup[groupKey] || {})[studentId] || { a1: "", a2: "" }),
+      [key]: value,
+    };
+
+    setScoresByGroup((prev) => ({
+      ...prev,
+      [groupKey]: {
+        ...(prev[groupKey] || {}),
+        [studentId]: nextRecord,
+      },
+    }));
+
+    setRowSaveStateByGroup((prev) => ({
+      ...prev,
+      [groupKey]: {
+        ...(prev[groupKey] || {}),
+        [studentId]: "typing",
+      },
+    }));
+
+    const timerKey = `${groupKey}::${studentId}`;
+
+    if (saveTimers[timerKey]) {
+      window.clearTimeout(saveTimers[timerKey]);
+    }
+
+    const timer = window.setTimeout(() => {
+      void saveAttemptNow(groupKey, studentId, nextRecord);
+    }, 800);
+
+    setSaveTimers((prev) => ({
+      ...prev,
+      [timerKey]: timer,
+    }));
+  };
+
+  const handleLoadGroup = async (group: string) => {
     setSelectedGroup(group);
     setPage("entry");
+    setLoadingStudents(true);
+    setError("");
+    setMessage("");
 
     if (studentsByGroup[group]) {
       setStudents(studentsByGroup[group]);
@@ -238,71 +357,49 @@ export default function App() {
       return;
     }
 
-    setLoadingStudents(true);
-    setStudents([]);
+    try {
+      const data = await fetchJson(
+        `${API_BASE}?action=getGroupStudents&className=${encodeURIComponent(
+          selectedClass
+        )}&group=${encodeURIComponent(group)}`
+      );
 
-    fetch(
-      `${API_BASE}?action=getGroupStudents&className=${encodeURIComponent(
-        selectedClass
-      )}&group=${encodeURIComponent(group)}`
-    )
-      .then((r) => r.json())
-      .then((data) => {
-        const fetchedStudents = data.students || [];
-        setStudentsByGroup((prev) => ({ ...prev, [group]: fetchedStudents }));
-        setStudents(fetchedStudents);
-      })
-      .catch((err) => {
-        console.error("Failed to load group students:", err);
-        setError("Failed to load students");
-      })
-      .finally(() => {
-        setLoadingStudents(false);
-      });
+      const fetchedStudents = data.students || [];
+      setStudentsByGroup((prev) => ({
+        ...prev,
+        [group]: fetchedStudents,
+      }));
+      setStudents(fetchedStudents);
+    } catch (err) {
+      console.error("Failed to load students:", err);
+      setError("Unable to load students");
+    } finally {
+      setLoadingStudents(false);
+    }
   };
 
-  const updateScore = (id: string, key: "a1" | "a2", value: string) => {
-    setScoresByGroup((prev) => ({
-      ...prev,
-      [selectedGroup]: {
-        ...(prev[selectedGroup] || {}),
-        [id]: {
-          ...((prev[selectedGroup] || {})[id] || { a1: "", a2: "" }),
-          [key]: value,
-        },
-      },
-    }));
+  const handleBackToGroups = () => {
+    setPage("groups");
   };
 
-  const save = async () => {
+  const handleSubmit = async () => {
     try {
       setSubmitting(true);
       setError("");
-      setMessage("");
 
-      for (const s of students) {
-        const rec = (scoresByGroup[selectedGroup] || {})[s.id];
-        if (!rec) continue;
+      for (const timer of Object.values(saveTimers)) {
+        window.clearTimeout(timer);
+      }
+      setSaveTimers({});
 
-        await fetch(API_BASE, {
-          method: "POST",
-          headers: {
-            "Content-Type": "text/plain;charset=utf-8",
-          },
-          body: JSON.stringify({
-            action: "saveAttempt",
-            teacher,
-            station: currentStation.label,
-            className: selectedClass,
-            group: selectedGroup,
-            studentId: s.id,
-            attempt1: rec.a1,
-            attempt2: rec.a2,
-          }),
-        });
+      for (const student of students) {
+        const record = (scoresByGroup[selectedGroup] || {})[student.id];
+        if (record && (record.a1 !== "" || record.a2 !== "")) {
+          await saveAttemptNow(selectedGroup, student.id, record);
+        }
       }
 
-      await fetch(API_BASE, {
+      await fetchJson(API_BASE, {
         method: "POST",
         headers: {
           "Content-Type": "text/plain;charset=utf-8",
@@ -322,12 +419,12 @@ export default function App() {
       }));
 
       setMessage(`${selectedGroup} submitted successfully`);
-      setStudents([]);
       setSelectedGroup("");
+      setStudents([]);
       setPage("groups");
     } catch (err) {
-      console.error("Save failed:", err);
-      setError("Save failed");
+      console.error("Submit failed:", err);
+      setError("Submit failed");
     } finally {
       setSubmitting(false);
     }
@@ -481,10 +578,11 @@ export default function App() {
           <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
             {groups.map((g) => {
               const style = statusStyles(groupStatuses[g] || "not-started");
+
               return (
                 <button
                   key={g}
-                  onClick={() => loadGroup(g)}
+                  onClick={() => handleLoadGroup(g)}
                   style={{
                     padding: 18,
                     borderRadius: 14,
@@ -524,7 +622,7 @@ export default function App() {
             whiteSpace: "nowrap",
           }}
         >
-          {loadingStudents ? "Opening group..." : `${enteredCount} / ${students.length} entered`}
+          {loadingStudents ? "Opening group..." : `${completionCount} / ${students.length} entered`}
         </div>
       </div>
 
@@ -561,10 +659,12 @@ export default function App() {
         const rec = currentScores[s.id] || { a1: "", a2: "" };
         const best = getBest(rec.a1, rec.a2, currentStation.better);
         const bestAttempt = getBestAttempt(rec.a1, rec.a2, currentStation.better);
+        const saveState = currentRowSaveState[s.id] || "";
 
         return (
           <div
             key={s.id}
+            id={`row-${s.id}`}
             style={{
               border: "1px solid #ccc",
               borderRadius: 14,
@@ -573,9 +673,19 @@ export default function App() {
               background: "#fff",
             }}
           >
-            <div style={{ fontWeight: 700, fontSize: 18 }}>{s.name}</div>
-            <div style={{ color: "#666", marginBottom: 12 }}>
-              {s.gender} • {s.group}
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 18 }}>{s.name}</div>
+                <div style={{ color: "#666", marginBottom: 12 }}>
+                  {s.gender} • {s.group}
+                </div>
+              </div>
+              <div style={{ fontSize: 14, color: "#666" }}>
+                {saveState === "saving" && "Saving..."}
+                {saveState === "saved" && "Saved"}
+                {saveState === "typing" && "Typing..."}
+                {saveState === "error" && "Save failed"}
+              </div>
             </div>
 
             <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
@@ -584,18 +694,21 @@ export default function App() {
                 <input
                   placeholder={currentStation.unit}
                   value={rec.a1}
+                  inputMode={station === "shuttle" ? "decimal" : "numeric"}
                   onChange={(e) => updateScore(s.id, "a1", e.target.value)}
                   style={{
-                    padding: 12,
+                    padding: 14,
                     width: "100%",
                     borderRadius: 10,
                     border: bestAttempt === 1 ? "2px solid #16a34a" : "1px solid #ccc",
                     background: bestAttempt === 1 ? "#f0fdf4" : "#fff",
-                    fontSize: 16,
+                    fontSize: 20,
                   }}
                 />
                 {bestAttempt === 1 && (
-                  <div style={{ marginTop: 6, color: "#166534", fontWeight: 700, fontSize: 14 }}>Best</div>
+                  <div style={{ marginTop: 6, color: "#166534", fontWeight: 700, fontSize: 14 }}>
+                    Best
+                  </div>
                 )}
               </div>
 
@@ -604,18 +717,21 @@ export default function App() {
                 <input
                   placeholder={currentStation.unit}
                   value={rec.a2}
+                  inputMode={station === "shuttle" ? "decimal" : "numeric"}
                   onChange={(e) => updateScore(s.id, "a2", e.target.value)}
                   style={{
-                    padding: 12,
+                    padding: 14,
                     width: "100%",
                     borderRadius: 10,
                     border: bestAttempt === 2 ? "2px solid #16a34a" : "1px solid #ccc",
                     background: bestAttempt === 2 ? "#f0fdf4" : "#fff",
-                    fontSize: 16,
+                    fontSize: 20,
                   }}
                 />
                 {bestAttempt === 2 && (
-                  <div style={{ marginTop: 6, color: "#166534", fontWeight: 700, fontSize: 14 }}>Best</div>
+                  <div style={{ marginTop: 6, color: "#166534", fontWeight: 700, fontSize: 14 }}>
+                    Best
+                  </div>
                 )}
               </div>
             </div>
@@ -646,7 +762,7 @@ export default function App() {
         }}
       >
         <button
-          onClick={() => setPage("groups")}
+          onClick={handleBackToGroups}
           style={{
             padding: "14px 18px",
             cursor: "pointer",
@@ -660,18 +776,18 @@ export default function App() {
           Back
         </button>
         <button
-          onClick={save}
-          disabled={submitting}
+          onClick={handleSubmit}
+          disabled={!hasData || submitting}
           style={{
             padding: "14px 18px",
-            cursor: submitting ? "not-allowed" : "pointer",
+            cursor: !hasData || submitting ? "not-allowed" : "pointer",
             borderRadius: 12,
             border: "none",
             background: "#111",
             color: "#fff",
             fontSize: 16,
             flex: 1,
-            opacity: submitting ? 0.7 : 1,
+            opacity: !hasData || submitting ? 0.7 : 1,
           }}
         >
           {submitting ? "Submitting..." : "Save & Submit"}
