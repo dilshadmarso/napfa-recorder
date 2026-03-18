@@ -31,19 +31,14 @@ type Student = {
 type ScoreRecord = {
   a1: string;
   a2: string;
+  absent: boolean;
 };
 
-type GroupStatus = {
-  group: string;
-  status: "not-started" | "in-progress";
-};
-
+type GroupStatusValue = "not-started" | "in-progress" | "completed";
 type RowSaveState = "typing" | "saving" | "saved" | "error" | "";
 
 function formatValueForDisplay(value: number, stationId: string) {
-  if (stationId === "shuttle") {
-    return value.toFixed(1);
-  }
+  if (stationId === "shuttle") return value.toFixed(1);
   return String(value);
 }
 
@@ -51,8 +46,11 @@ function getBest(
   a1: string,
   a2: string,
   better: "higher" | "lower",
-  stationId: string
+  stationId: string,
+  absent?: boolean
 ) {
+  if (absent) return "";
+
   const v1 = parseFloat(a1);
   const v2 = parseFloat(a2);
 
@@ -67,7 +65,13 @@ function getBest(
   return formatValueForDisplay(v1 > v2 ? v1 : v2, stationId);
 }
 
-function getBestAttempt(a1: string, a2: string, better: "higher" | "lower") {
+// 0 = none
+// 1 = attempt 1 best
+// 2 = attempt 2 best
+// 3 = both equal best
+function getBestAttempt(a1: string, a2: string, better: "higher" | "lower", absent?: boolean) {
+  if (absent) return 0;
+
   const v1 = parseFloat(a1);
   const v2 = parseFloat(a2);
 
@@ -75,18 +79,22 @@ function getBestAttempt(a1: string, a2: string, better: "higher" | "lower") {
   if (!Number.isNaN(v1) && Number.isNaN(v2)) return 1;
   if (Number.isNaN(v1) && !Number.isNaN(v2)) return 2;
 
-  if (better === "lower") {
-    if (v1 < v2) return 1;
-    if (v2 < v1) return 2;
-    return 0;
-  }
+  if (v1 === v2) return 3;
 
-  if (v1 > v2) return 1;
-  if (v2 > v1) return 2;
-  return 0;
+  if (better === "lower") return v1 < v2 ? 1 : 2;
+  return v1 > v2 ? 1 : 2;
 }
 
-function statusStyles(status: GroupStatus["status"]) {
+function statusStyles(status: GroupStatusValue) {
+  if (status === "completed") {
+    return {
+      border: "1px solid #86efac",
+      background: "#f0fdf4",
+      label: "Completed",
+      labelColor: "#166534",
+    };
+  }
+
   if (status === "in-progress") {
     return {
       border: "1px solid #fde68a",
@@ -107,17 +115,17 @@ function statusStyles(status: GroupStatus["status"]) {
 function getValidationConfig(stationId: string) {
   switch (stationId) {
     case "situp":
-      return { maxLength: 2, placeholder: "0-99", mode: "integer" as const };
+      return { maxLength: 2, placeholder: "0-99" };
     case "broadjump":
-      return { maxLength: 3, placeholder: "0-999", mode: "integer" as const };
+      return { maxLength: 3, placeholder: "0-999" };
     case "sitreach":
-      return { maxLength: 2, placeholder: "0-99", mode: "integer" as const };
+      return { maxLength: 2, placeholder: "0-99" };
     case "ipu":
-      return { maxLength: 2, placeholder: "0-99", mode: "integer" as const };
+      return { maxLength: 2, placeholder: "0-99" };
     case "shuttle":
-      return { maxLength: 4, placeholder: "0.0", mode: "decimal1" as const };
+      return { maxLength: 5, placeholder: "12.3" };
     default:
-      return { maxLength: 3, placeholder: "", mode: "integer" as const };
+      return { maxLength: 3, placeholder: "" };
   }
 }
 
@@ -138,21 +146,12 @@ function sanitiseInput(value: string, stationId: string) {
     const whole = (parts[0] || "").slice(0, 3);
     const decimal = (parts[1] || "").slice(0, 1);
 
-    cleaned = decimal !== "" ? `${whole}.${decimal}` : whole;
-
-    if (cleaned.length > 4) {
-      cleaned = cleaned.slice(0, 4);
-    }
-
-    return cleaned;
+    return decimal !== "" ? `${whole}.${decimal}` : whole;
   }
 
   const digitsOnly = raw.replace(/\D/g, "");
 
-  if (stationId === "broadjump") {
-    return digitsOnly.slice(0, 3);
-  }
-
+  if (stationId === "broadjump") return digitsOnly.slice(0, 3);
   return digitsOnly.slice(0, 2);
 }
 
@@ -178,7 +177,7 @@ async function fetchJson(url: string, options: RequestInit = {}) {
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error(`Non-JSON response from server: ${text.slice(0, 120)}`);
+    throw new Error(`Non-JSON response from server: ${text.slice(0, 200)}`);
   }
 
   if (!data.success) {
@@ -198,7 +197,7 @@ export default function App() {
   const [selectedClass, setSelectedClass] = useState("");
 
   const [groups, setGroups] = useState<string[]>([]);
-  const [groupStatuses, setGroupStatuses] = useState<Record<string, GroupStatus["status"]>>({});
+  const [groupStatuses, setGroupStatuses] = useState<Record<string, GroupStatusValue>>({});
   const [selectedGroup, setSelectedGroup] = useState("");
 
   const [students, setStudents] = useState<Student[]>([]);
@@ -210,6 +209,7 @@ export default function App() {
   const [rowSaveStateByGroup, setRowSaveStateByGroup] = useState<
     Record<string, Record<string, RowSaveState>>
   >({});
+
   const saveTimersRef = useRef<Record<string, number>>({});
 
   const [loadingClasses, setLoadingClasses] = useState(false);
@@ -228,14 +228,14 @@ export default function App() {
 
   const completionCount = useMemo(() => {
     return students.filter((student) => {
-      const record = currentScores[student.id] || { a1: "", a2: "" };
-      return record.a1 !== "" || record.a2 !== "";
+      const record = currentScores[student.id] || { a1: "", a2: "", absent: false };
+      return record.absent || record.a1 !== "" || record.a2 !== "";
     }).length;
   }, [students, currentScores]);
 
   const hasData = useMemo(() => {
     return Object.values(currentScores).some(
-      (record) => record.a1 !== "" || record.a2 !== ""
+      (record) => record.absent || record.a1 !== "" || record.a2 !== ""
     );
   }, [currentScores]);
 
@@ -262,7 +262,6 @@ export default function App() {
           setSelectedClass(nextClasses[0]);
         }
       } catch (err) {
-        console.error("Failed to load classes:", err);
         setError(err instanceof Error ? err.message : "Failed to load classes");
       } finally {
         setLoadingClasses(false);
@@ -287,26 +286,20 @@ export default function App() {
         const nextGroups = Array.isArray(groupsData.groups) ? groupsData.groups : [];
         setGroups(nextGroups);
 
-        try {
-          const statusesData = await fetchJson(
-            `${API_BASE}?action=getGroupStatuses&className=${encodeURIComponent(
-              selectedClass
-            )}&stationId=${encodeURIComponent(currentStation.id)}`
-          );
+        const statusesData = await fetchJson(
+          `${API_BASE}?action=getGroupStatuses&className=${encodeURIComponent(
+            selectedClass
+          )}&stationId=${encodeURIComponent(currentStation.id)}`
+        );
 
-          const map: Record<string, GroupStatus["status"]> = {};
-          const statuses = Array.isArray(statusesData.statuses) ? statusesData.statuses : [];
+        const map: Record<string, GroupStatusValue> = {};
+        const statuses = Array.isArray(statusesData.statuses) ? statusesData.statuses : [];
 
-          statuses.forEach((item: GroupStatus) => {
-            if (item?.group) {
-              map[item.group] = item.status;
-            }
-          });
+        statuses.forEach((item: { group: string; status: GroupStatusValue }) => {
+          if (item?.group) map[item.group] = item.status;
+        });
 
-          setGroupStatuses(map);
-        } catch (statusErr) {
-          console.error("Failed to load group statuses:", statusErr);
-        }
+        setGroupStatuses(map);
 
         nextGroups.forEach((group: string) => {
           if (studentsByGroup[group]) return;
@@ -323,12 +316,9 @@ export default function App() {
                 return { ...prev, [group]: nextStudents };
               });
             })
-            .catch((preloadErr) => {
-              console.error(`Failed to preload ${group}:`, preloadErr);
-            });
+            .catch(() => {});
         });
       } catch (err) {
-        console.error("Failed to load groups:", err);
         setError(err instanceof Error ? err.message : "Failed to load groups");
       } finally {
         setLoadingGroups(false);
@@ -367,9 +357,6 @@ export default function App() {
 
       await fetchJson(API_BASE, {
         method: "POST",
-        headers: {
-          "Content-Type": "text/plain;charset=utf-8",
-        },
         body: JSON.stringify({
           action: "saveAttempt",
           teacher: teacher.trim(),
@@ -378,8 +365,9 @@ export default function App() {
           className: selectedClass,
           group: groupKey,
           studentId,
-          attempt1: record.a1,
-          attempt2: record.a2,
+          attempt1: record.absent ? "" : record.a1,
+          attempt2: record.absent ? "" : record.a2,
+          absent: !!record.absent,
         }),
       });
 
@@ -390,32 +378,32 @@ export default function App() {
           [studentId]: "saved",
         },
       }));
-
-      setGroupStatuses((prev) => ({
+    } catch (err) {
+      setRowSaveStateByGroup((prev) => ({
         ...prev,
-        [groupKey]: "in-progress",
+        [groupKey]: {
+          ...(prev[groupKey] || {}),
+          [studentId]: "error",
+        },
       }));
-} catch (err) {
-  console.error("Save failed:", err);
 
-  setRowSaveStateByGroup((prev) => ({
-    ...prev,
-    [groupKey]: {
-      ...(prev[groupKey] || {}),
-      [studentId]: "error",
-    },
-  }));
-
-  setError(err instanceof Error ? err.message : "Save failed");
-}
+      setError(err instanceof Error ? err.message : "Save failed");
+    }
   };
 
   const handleAttemptChange = (studentId: string, key: "a1" | "a2", value: string) => {
     const groupKey = selectedGroup;
     const cleaned = sanitiseInput(value, currentStation.id);
 
-    const nextRecord = {
-      ...((scoresByGroup[groupKey] || {})[studentId] || { a1: "", a2: "" }),
+    const current = (scoresByGroup[groupKey] || {})[studentId] || {
+      a1: "",
+      a2: "",
+      absent: false,
+    };
+
+    const nextRecord: ScoreRecord = {
+      ...current,
+      absent: false,
       [key]: cleaned,
     };
 
@@ -450,6 +438,44 @@ export default function App() {
     saveTimersRef.current[timerKey] = timer;
   };
 
+  const handleAbsentToggle = (studentId: string, checked: boolean) => {
+    const groupKey = selectedGroup;
+
+    const nextRecord: ScoreRecord = checked
+      ? { a1: "", a2: "", absent: true }
+      : { a1: "", a2: "", absent: false };
+
+    setScoresByGroup((prev) => ({
+      ...prev,
+      [groupKey]: {
+        ...(prev[groupKey] || {}),
+        [studentId]: nextRecord,
+      },
+    }));
+
+    setRowSaveStateByGroup((prev) => ({
+      ...prev,
+      [groupKey]: {
+        ...(prev[groupKey] || {}),
+        [studentId]: "typing",
+      },
+    }));
+
+    setError("");
+
+    const timerKey = `${groupKey}::${studentId}`;
+
+    if (saveTimersRef.current[timerKey]) {
+      window.clearTimeout(saveTimersRef.current[timerKey]);
+    }
+
+    const timer = window.setTimeout(() => {
+      void saveAttemptNow(groupKey, studentId, nextRecord);
+    }, 300);
+
+    saveTimersRef.current[timerKey] = timer;
+  };
+
   const loadGroupScores = async (group: string) => {
     const data = await fetchJson(
       `${API_BASE}?action=getGroupScores&className=${encodeURIComponent(
@@ -465,6 +491,7 @@ export default function App() {
         mappedScores[row.studentId] = {
           a1: row.attempt1 ? String(row.attempt1) : "",
           a2: row.attempt2 ? String(row.attempt2) : "",
+          absent: row.absent === true || String(row.absent).toLowerCase() === "true",
         };
       }
     });
@@ -477,7 +504,7 @@ export default function App() {
     const saveStateMap: Record<string, RowSaveState> = {};
     Object.keys(mappedScores).forEach((studentId) => {
       const r = mappedScores[studentId];
-      if (r.a1 !== "" || r.a2 !== "") {
+      if (r.absent || r.a1 !== "" || r.a2 !== "") {
         saveStateMap[studentId] = "saved";
       }
     });
@@ -486,13 +513,6 @@ export default function App() {
       ...prev,
       [group]: saveStateMap,
     }));
-
-    if (Object.keys(mappedScores).length > 0) {
-      setGroupStatuses((prev) => ({
-        ...prev,
-        [group]: "in-progress",
-      }));
-    }
   };
 
   const handleLoadGroup = async (group: string) => {
@@ -523,7 +543,6 @@ export default function App() {
       setStudents(fetchedStudents || []);
       await loadGroupScores(group);
     } catch (err) {
-      console.error("Failed to load group:", err);
       setError(err instanceof Error ? err.message : "Unable to load group");
     } finally {
       setLoadingStudents(false);
@@ -544,11 +563,13 @@ export default function App() {
   const handleClearGroup = async () => {
     if (!selectedGroup) return;
 
-    const confirmedPhrase = window.prompt(
-      `Type CLEAR to erase all saved values for ${selectedGroup}.`
+    const confirm1 = window.confirm(
+      `This will clear all saved values for ${selectedGroup}.\n\nContinue?`
     );
+    if (!confirm1) return;
 
-    if (confirmedPhrase !== "CLEAR") return;
+    const confirm2 = window.confirm("This cannot be undone.\n\nAre you absolutely sure?");
+    if (!confirm2) return;
 
     try {
       setClearingGroup(true);
@@ -562,9 +583,6 @@ export default function App() {
 
       await fetchJson(API_BASE, {
         method: "POST",
-        headers: {
-          "Content-Type": "text/plain;charset=utf-8",
-        },
         body: JSON.stringify({
           action: "clearGroupScores",
           teacher: teacher.trim(),
@@ -579,7 +597,7 @@ export default function App() {
       const clearedRowStates: Record<string, RowSaveState> = {};
 
       students.forEach((student) => {
-        clearedScores[student.id] = { a1: "", a2: "" };
+        clearedScores[student.id] = { a1: "", a2: "", absent: false };
         clearedRowStates[student.id] = "";
       });
 
@@ -600,7 +618,6 @@ export default function App() {
 
       setMessage(`${selectedGroup} cleared successfully`);
     } catch (err) {
-      console.error("Clear failed:", err);
       setError(err instanceof Error ? err.message : "Clear failed");
     } finally {
       setClearingGroup(false);
@@ -892,9 +909,7 @@ export default function App() {
             whiteSpace: "nowrap",
           }}
         >
-          {loadingStudents
-            ? "Opening group..."
-            : `${completionCount} / ${students.length} entered`}
+          {loadingStudents ? "Opening group..." : `${completionCount} / ${students.length} completed`}
         </div>
       </div>
 
@@ -943,9 +958,14 @@ export default function App() {
       )}
 
       {students.map((s, index) => {
-        const rec = currentScores[s.id] || { a1: "", a2: "" };
-        const best = getBest(rec.a1, rec.a2, currentStation.better, currentStation.id);
-        const bestAttempt = getBestAttempt(rec.a1, rec.a2, currentStation.better);
+        const rec = currentScores[s.id] || { a1: "", a2: "", absent: false };
+        const best = getBest(rec.a1, rec.a2, currentStation.better, currentStation.id, rec.absent);
+        const bestAttempt = getBestAttempt(
+          rec.a1,
+          rec.a2,
+          currentStation.better,
+          rec.absent
+        );
         const saveState = currentRowSaveState[s.id] || "";
 
         const a1Valid = isValidValueForStation(rec.a1, currentStation.id);
@@ -999,11 +1019,40 @@ export default function App() {
               </div>
             </div>
 
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 16,
+                padding: "8px 12px",
+                borderRadius: 10,
+                background: rec.absent ? "#fef2f2" : "#f8fafc",
+                border: rec.absent ? "1px solid #fca5a5" : "1px solid #e2e8f0",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={!!rec.absent}
+                onChange={(e) => handleAbsentToggle(s.id, e.target.checked)}
+              />
+              <span
+                style={{
+                  fontWeight: 700,
+                  color: rec.absent ? "#b91c1c" : "#475569",
+                }}
+              >
+                Absent
+              </span>
+            </label>
+
             <div
               style={{
                 display: "grid",
-                gap: 12,
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                columnGap: 24,
+                rowGap: 16,
+                gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                alignItems: "start",
               }}
             >
               <div>
@@ -1011,6 +1060,7 @@ export default function App() {
                 <input
                   placeholder={currentValidation.placeholder}
                   value={rec.a1}
+                  disabled={!!rec.absent}
                   inputMode={station === "shuttle" ? "decimal" : "numeric"}
                   maxLength={currentValidation.maxLength}
                   enterKeyHint="next"
@@ -1023,25 +1073,30 @@ export default function App() {
                   }}
                   onChange={(e) => handleAttemptChange(s.id, "a1", e.target.value)}
                   style={{
-                    padding: 14,
+                    padding: "16px 18px",
                     width: "100%",
-                    borderRadius: 10,
+                    borderRadius: 12,
                     border: !a1Valid
                       ? "2px solid #dc2626"
-                      : bestAttempt === 1
+                      : bestAttempt === 1 || bestAttempt === 3
                       ? "2px solid #16a34a"
                       : "1px solid #ccc",
-                    background: bestAttempt === 1 ? "#f0fdf4" : "#fff",
+                    background: rec.absent
+                      ? "#f3f4f6"
+                      : bestAttempt === 1 || bestAttempt === 3
+                      ? "#f0fdf4"
+                      : "#fff",
                     fontSize: 24,
-                    minHeight: 64,
+                    minHeight: 68,
+                    boxSizing: "border-box",
                   }}
                 />
-                {!a1Valid && (
+                {!a1Valid && !rec.absent && (
                   <div style={{ marginTop: 6, color: "#b91c1c", fontSize: 13 }}>
                     Invalid value
                   </div>
                 )}
-                {bestAttempt === 1 && a1Valid && (
+                {(bestAttempt === 1 || bestAttempt === 3) && a1Valid && !rec.absent && (
                   <div
                     style={{
                       marginTop: 6,
@@ -1060,6 +1115,7 @@ export default function App() {
                 <input
                   placeholder={currentValidation.placeholder}
                   value={rec.a2}
+                  disabled={!!rec.absent}
                   inputMode={station === "shuttle" ? "decimal" : "numeric"}
                   maxLength={currentValidation.maxLength}
                   enterKeyHint={index < students.length - 1 ? "next" : "done"}
@@ -1074,25 +1130,30 @@ export default function App() {
                   }}
                   onChange={(e) => handleAttemptChange(s.id, "a2", e.target.value)}
                   style={{
-                    padding: 14,
+                    padding: "16px 18px",
                     width: "100%",
-                    borderRadius: 10,
+                    borderRadius: 12,
                     border: !a2Valid
                       ? "2px solid #dc2626"
-                      : bestAttempt === 2
+                      : bestAttempt === 2 || bestAttempt === 3
                       ? "2px solid #16a34a"
                       : "1px solid #ccc",
-                    background: bestAttempt === 2 ? "#f0fdf4" : "#fff",
+                    background: rec.absent
+                      ? "#f3f4f6"
+                      : bestAttempt === 2 || bestAttempt === 3
+                      ? "#f0fdf4"
+                      : "#fff",
                     fontSize: 24,
-                    minHeight: 64,
+                    minHeight: 68,
+                    boxSizing: "border-box",
                   }}
                 />
-                {!a2Valid && (
+                {!a2Valid && !rec.absent && (
                   <div style={{ marginTop: 6, color: "#b91c1c", fontSize: 13 }}>
                     Invalid value
                   </div>
                 )}
-                {bestAttempt === 2 && a2Valid && (
+                {(bestAttempt === 2 || bestAttempt === 3) && a2Valid && !rec.absent && (
                   <div
                     style={{
                       marginTop: 6,
@@ -1109,7 +1170,7 @@ export default function App() {
 
             <div
               style={{
-                marginTop: 12,
+                marginTop: 14,
                 padding: 12,
                 borderRadius: 10,
                 background: "#f8fafc",
@@ -1117,7 +1178,7 @@ export default function App() {
                 boxShadow: "inset 0 0 0 1px #e2e8f0",
               }}
             >
-              Best Score: {best ? `${best} ${currentStation.unit}` : "—"}
+              Best Score: {rec.absent ? "Absent" : best ? `${best} ${currentStation.unit}` : "—"}
             </div>
           </div>
         );
