@@ -115,17 +115,17 @@ function statusStyles(status: GroupStatusValue) {
 function getValidationConfig(stationId: string) {
   switch (stationId) {
     case "situp":
-      return { maxLength: 2, placeholder: "0-99" };
+      return { maxLength: 2 };
     case "broadjump":
-      return { maxLength: 3, placeholder: "0-999" };
+      return { maxLength: 3 };
     case "sitreach":
-      return { maxLength: 2, placeholder: "0-99" };
+      return { maxLength: 2 };
     case "ipu":
-      return { maxLength: 2, placeholder: "0-99" };
+      return { maxLength: 2 };
     case "shuttle":
-      return { maxLength: 5, placeholder: "12.3" };
+      return { maxLength: 4 };
     default:
-      return { maxLength: 3, placeholder: "" };
+      return { maxLength: 3 };
   }
 }
 
@@ -143,7 +143,7 @@ function sanitiseInput(value: string, stationId: string) {
     }
 
     const parts = cleaned.split(".");
-    const whole = (parts[0] || "").slice(0, 3);
+    const whole = (parts[0] || "").slice(0, 2);
     const decimal = (parts[1] || "").slice(0, 1);
 
     return decimal !== "" ? `${whole}.${decimal}` : whole;
@@ -159,7 +159,7 @@ function isValidValueForStation(value: string, stationId: string) {
   if (value === "") return true;
 
   if (stationId === "shuttle") {
-    return /^\d{2,3}(\.\d)?$/.test(value);
+    return /^\d{1,2}(\.\d)?$/.test(value);
   }
 
   if (stationId === "broadjump") {
@@ -476,78 +476,86 @@ export default function App() {
     saveTimersRef.current[timerKey] = timer;
   };
 
-  const loadGroupScores = async (group: string) => {
-    const data = await fetchJson(
-      `${API_BASE}?action=getGroupScores&className=${encodeURIComponent(
-        selectedClass
-      )}&group=${encodeURIComponent(group)}&stationId=${encodeURIComponent(currentStation.id)}`
-    );
+ const loadGroupScores = async (group: string) => {
+  if (!selectedClass || !group || !currentStation.id) {
+    return;
+  }
 
-    const scoreRows = Array.isArray(data.scores) ? data.scores : [];
-    const mappedScores: Record<string, ScoreRecord> = {};
+  const data = await fetchJson(
+    `${API_BASE}?action=getGroupScores&className=${encodeURIComponent(
+      selectedClass
+    )}&group=${encodeURIComponent(group)}&stationId=${encodeURIComponent(currentStation.id)}`
+  );
 
-    scoreRows.forEach((row: any) => {
-      if (row?.studentId) {
-        mappedScores[row.studentId] = {
-          a1: row.attempt1 ? String(row.attempt1) : "",
-          a2: row.attempt2 ? String(row.attempt2) : "",
-          absent: row.absent === true || String(row.absent).toLowerCase() === "true",
-        };
-      }
-    });
+  const scoreRows = Array.isArray(data.scores) ? data.scores : [];
+  const mappedScores: Record<string, ScoreRecord> = {};
 
-    setScoresByGroup((prev) => ({
-      ...prev,
-      [group]: mappedScores,
-    }));
+  scoreRows.forEach((row: any) => {
+    if (row?.studentId) {
+      mappedScores[row.studentId] = {
+        a1: row.attempt1 ? String(row.attempt1) : "",
+        a2: row.attempt2 ? String(row.attempt2) : "",
+        absent: row.absent === true || String(row.absent).toLowerCase() === "true",
+      };
+    }
+  });
 
-    const saveStateMap: Record<string, RowSaveState> = {};
-    Object.keys(mappedScores).forEach((studentId) => {
-      const r = mappedScores[studentId];
-      if (r.absent || r.a1 !== "" || r.a2 !== "") {
-        saveStateMap[studentId] = "saved";
-      }
-    });
+  setScoresByGroup((prev) => ({
+    ...prev,
+    [group]: mappedScores,
+  }));
 
-    setRowSaveStateByGroup((prev) => ({
-      ...prev,
-      [group]: saveStateMap,
-    }));
-  };
+  const saveStateMap: Record<string, RowSaveState> = {};
+  Object.keys(mappedScores).forEach((studentId) => {
+    const r = mappedScores[studentId];
+    if (r.absent || r.a1 !== "" || r.a2 !== "") {
+      saveStateMap[studentId] = "saved";
+    }
+  });
+
+  setRowSaveStateByGroup((prev) => ({
+    ...prev,
+    [group]: saveStateMap,
+  }));
+};
 
   const handleLoadGroup = async (group: string) => {
-    setSelectedGroup(group);
-    setPage("entry");
-    setLoadingStudents(true);
-    setError("");
-    setMessage("");
+  if (!selectedClass || !group || !currentStation.id) {
+    return;
+  }
 
-    try {
-      let fetchedStudents = studentsByGroup[group];
+  setSelectedGroup(group);
+  setPage("entry");
+  setLoadingStudents(true);
+  setError("");
+  setMessage("");
 
-      if (!fetchedStudents) {
-        const data = await fetchJson(
-          `${API_BASE}?action=getGroupStudents&className=${encodeURIComponent(
-            selectedClass
-          )}&group=${encodeURIComponent(group)}`
-        );
+  try {
+    let fetchedStudents = studentsByGroup[group];
 
-        fetchedStudents = Array.isArray(data.students) ? data.students : [];
+    if (!fetchedStudents) {
+      const data = await fetchJson(
+        `${API_BASE}?action=getGroupStudents&className=${encodeURIComponent(
+          selectedClass
+        )}&group=${encodeURIComponent(group)}`
+      );
 
-        setStudentsByGroup((prev) => ({
-          ...prev,
-          [group]: fetchedStudents!,
-        }));
-      }
+      fetchedStudents = Array.isArray(data.students) ? data.students : [];
 
-      setStudents(fetchedStudents || []);
-      await loadGroupScores(group);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load group");
-    } finally {
-      setLoadingStudents(false);
+      setStudentsByGroup((prev) => ({
+        ...prev,
+        [group]: fetchedStudents!,
+      }));
     }
-  };
+
+    setStudents(fetchedStudents || []);
+    await loadGroupScores(group);
+  } catch (err) {
+    setError(err instanceof Error ? err.message : "Unable to load group");
+  } finally {
+    setLoadingStudents(false);
+  }
+};
 
   const handleEntryBack = () => {
     if (hasPendingSaves) {
@@ -682,12 +690,13 @@ export default function App() {
             <button
               key={s.id}
               onClick={() => {
-                setStation(s.id);
-                setSelectedClass("");
-                setSelectedGroup("");
-                setMessage("");
-                setError("");
-              }}
+  setStation(s.id);
+  setSelectedClass("");
+  setSelectedGroup("");
+  setStudents([]);
+  setMessage("");
+  setError("");
+}}
               style={{
                 padding: "16px 18px",
                 borderRadius: 14,
