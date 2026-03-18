@@ -203,6 +203,11 @@ export default function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [studentsByGroup, setStudentsByGroup] = useState<Record<string, Student[]>>({});
 
+  const [groupsByClass, setGroupsByClass] = useState<Record<string, string[]>>({});
+  const [statusesByClassStation, setStatusesByClassStation] = useState<
+    Record<string, Record<string, GroupStatusValue>>
+  >({});
+
   const [scoresByGroup, setScoresByGroup] = useState<Record<string, Record<string, ScoreRecord>>>(
     {}
   );
@@ -247,6 +252,7 @@ export default function App() {
 
   useEffect(() => {
     if (page !== "groups") return;
+    if (classes.length > 0) return;
 
     const loadClasses = async () => {
       try {
@@ -269,55 +275,59 @@ export default function App() {
     };
 
     void loadClasses();
-  }, [page, selectedClass]);
+  }, [page, classes.length, selectedClass]);
 
   useEffect(() => {
     if (!selectedClass || page !== "groups") return;
+
+    const statusKey = `${selectedClass}::${currentStation.id}`;
 
     const loadGroupsAndStatuses = async () => {
       try {
         setLoadingGroups(true);
         setError("");
 
-        const groupsData = await fetchJson(
-          `${API_BASE}?action=getGroups&className=${encodeURIComponent(selectedClass)}`
-        );
+        let nextGroups = groupsByClass[selectedClass];
 
-        const nextGroups = Array.isArray(groupsData.groups) ? groupsData.groups : [];
-        setGroups(nextGroups);
+        if (!nextGroups) {
+          const groupsData = await fetchJson(
+            `${API_BASE}?action=getGroups&className=${encodeURIComponent(selectedClass)}`
+          );
+          nextGroups = Array.isArray(groupsData.groups) ? groupsData.groups : [];
 
-        const statusesData = await fetchJson(
-          `${API_BASE}?action=getGroupStatuses&className=${encodeURIComponent(
-            selectedClass
-          )}&stationId=${encodeURIComponent(currentStation.id)}`
-        );
+          setGroupsByClass((prev) => ({
+            ...prev,
+            [selectedClass]: nextGroups || [],
+          }));
+        }
 
-        const map: Record<string, GroupStatusValue> = {};
-        const statuses = Array.isArray(statusesData.statuses) ? statusesData.statuses : [];
+        setGroups(nextGroups || []);
 
-        statuses.forEach((item: { group: string; status: GroupStatusValue }) => {
-          if (item?.group) map[item.group] = item.status;
-        });
+        let nextStatuses = statusesByClassStation[statusKey];
 
-        setGroupStatuses(map);
-
-        nextGroups.forEach((group: string) => {
-          if (studentsByGroup[group]) return;
-
-          fetchJson(
-            `${API_BASE}?action=getGroupStudents&className=${encodeURIComponent(
+        if (!nextStatuses) {
+          const statusesData = await fetchJson(
+            `${API_BASE}?action=getGroupStatuses&className=${encodeURIComponent(
               selectedClass
-            )}&group=${encodeURIComponent(group)}`
-          )
-            .then((groupData) => {
-              const nextStudents = Array.isArray(groupData.students) ? groupData.students : [];
-              setStudentsByGroup((prev) => {
-                if (prev[group]) return prev;
-                return { ...prev, [group]: nextStudents };
-              });
-            })
-            .catch(() => {});
-        });
+            )}&stationId=${encodeURIComponent(currentStation.id)}`
+          );
+
+          const map: Record<string, GroupStatusValue> = {};
+          const statuses = Array.isArray(statusesData.statuses) ? statusesData.statuses : [];
+
+          statuses.forEach((item: { group: string; status: GroupStatusValue }) => {
+            if (item?.group) map[item.group] = item.status;
+          });
+
+          nextStatuses = map;
+
+          setStatusesByClassStation((prev) => ({
+            ...prev,
+            [statusKey]: map,
+          }));
+        }
+
+        setGroupStatuses(nextStatuses || {});
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load groups");
       } finally {
@@ -326,7 +336,7 @@ export default function App() {
     };
 
     void loadGroupsAndStatuses();
-  }, [selectedClass, currentStation.id, page, studentsByGroup]);
+  }, [selectedClass, currentStation.id, page, groupsByClass, statusesByClassStation]);
 
   useEffect(() => {
     if (!selectedGroup) return;
@@ -336,6 +346,42 @@ export default function App() {
       setLoadingStudents(false);
     }
   }, [selectedGroup, studentsByGroup]);
+
+  const updateGroupStatusLocally = (
+    groupKey: string,
+    records: Record<string, ScoreRecord>,
+    studentsList: Student[]
+  ) => {
+    const completed = studentsList.filter((student) => {
+      const r = records[student.id];
+      return r && (r.absent || r.a1 !== "" || r.a2 !== "");
+    }).length;
+
+    let status: GroupStatusValue = "not-started";
+    if (completed === 0) {
+      status = "not-started";
+    } else if (completed === studentsList.length && studentsList.length > 0) {
+      status = "completed";
+    } else {
+      status = "in-progress";
+    }
+
+    setGroupStatuses((prev) => ({
+      ...prev,
+      [groupKey]: status,
+    }));
+
+    if (selectedClass) {
+      const statusKey = `${selectedClass}::${currentStation.id}`;
+      setStatusesByClassStation((prev) => ({
+        ...prev,
+        [statusKey]: {
+          ...(prev[statusKey] || {}),
+          [groupKey]: status,
+        },
+      }));
+    }
+  };
 
   const focusInput = (studentIndex: number, key: "a1" | "a2") => {
     const element = document.getElementById(
@@ -378,6 +424,12 @@ export default function App() {
           [studentId]: "saved",
         },
       }));
+
+      const nextGroupScores = {
+        ...(scoresByGroup[groupKey] || {}),
+        [studentId]: record,
+      };
+      updateGroupStatusLocally(groupKey, nextGroupScores, students);
     } catch (err) {
       setRowSaveStateByGroup((prev) => ({
         ...prev,
@@ -407,12 +459,14 @@ export default function App() {
       [key]: cleaned,
     };
 
+    const nextGroupScores = {
+      ...(scoresByGroup[groupKey] || {}),
+      [studentId]: nextRecord,
+    };
+
     setScoresByGroup((prev) => ({
       ...prev,
-      [groupKey]: {
-        ...(prev[groupKey] || {}),
-        [studentId]: nextRecord,
-      },
+      [groupKey]: nextGroupScores,
     }));
 
     setRowSaveStateByGroup((prev) => ({
@@ -424,6 +478,7 @@ export default function App() {
     }));
 
     setError("");
+    updateGroupStatusLocally(groupKey, nextGroupScores, students);
 
     const timerKey = `${groupKey}::${studentId}`;
 
@@ -445,12 +500,14 @@ export default function App() {
       ? { a1: "", a2: "", absent: true }
       : { a1: "", a2: "", absent: false };
 
+    const nextGroupScores = {
+      ...(scoresByGroup[groupKey] || {}),
+      [studentId]: nextRecord,
+    };
+
     setScoresByGroup((prev) => ({
       ...prev,
-      [groupKey]: {
-        ...(prev[groupKey] || {}),
-        [studentId]: nextRecord,
-      },
+      [groupKey]: nextGroupScores,
     }));
 
     setRowSaveStateByGroup((prev) => ({
@@ -462,6 +519,7 @@ export default function App() {
     }));
 
     setError("");
+    updateGroupStatusLocally(groupKey, nextGroupScores, students);
 
     const timerKey = `${groupKey}::${studentId}`;
 
@@ -476,86 +534,84 @@ export default function App() {
     saveTimersRef.current[timerKey] = timer;
   };
 
- const loadGroupScores = async (group: string) => {
-  if (!selectedClass || !group || !currentStation.id) {
-    return;
-  }
+  const loadGroupScores = async (group: string) => {
+    if (!selectedClass || !group || !currentStation.id) return;
 
-  const data = await fetchJson(
-    `${API_BASE}?action=getGroupScores&className=${encodeURIComponent(
-      selectedClass
-    )}&group=${encodeURIComponent(group)}&stationId=${encodeURIComponent(currentStation.id)}`
-  );
+    const data = await fetchJson(
+      `${API_BASE}?action=getGroupScores&className=${encodeURIComponent(
+        selectedClass
+      )}&group=${encodeURIComponent(group)}&stationId=${encodeURIComponent(currentStation.id)}`
+    );
 
-  const scoreRows = Array.isArray(data.scores) ? data.scores : [];
-  const mappedScores: Record<string, ScoreRecord> = {};
+    const scoreRows = Array.isArray(data.scores) ? data.scores : [];
+    const mappedScores: Record<string, ScoreRecord> = {};
 
-  scoreRows.forEach((row: any) => {
-    if (row?.studentId) {
-      mappedScores[row.studentId] = {
-        a1: row.attempt1 ? String(row.attempt1) : "",
-        a2: row.attempt2 ? String(row.attempt2) : "",
-        absent: row.absent === true || String(row.absent).toLowerCase() === "true",
-      };
-    }
-  });
+    scoreRows.forEach((row: any) => {
+      if (row?.studentId) {
+        mappedScores[row.studentId] = {
+          a1: row.attempt1 ? String(row.attempt1) : "",
+          a2: row.attempt2 ? String(row.attempt2) : "",
+          absent: row.absent === true || String(row.absent).toLowerCase() === "true",
+        };
+      }
+    });
 
-  setScoresByGroup((prev) => ({
-    ...prev,
-    [group]: mappedScores,
-  }));
+    setScoresByGroup((prev) => ({
+      ...prev,
+      [group]: mappedScores,
+    }));
 
-  const saveStateMap: Record<string, RowSaveState> = {};
-  Object.keys(mappedScores).forEach((studentId) => {
-    const r = mappedScores[studentId];
-    if (r.absent || r.a1 !== "" || r.a2 !== "") {
-      saveStateMap[studentId] = "saved";
-    }
-  });
+    const saveStateMap: Record<string, RowSaveState> = {};
+    Object.keys(mappedScores).forEach((studentId) => {
+      const r = mappedScores[studentId];
+      if (r.absent || r.a1 !== "" || r.a2 !== "") {
+        saveStateMap[studentId] = "saved";
+      }
+    });
 
-  setRowSaveStateByGroup((prev) => ({
-    ...prev,
-    [group]: saveStateMap,
-  }));
-};
+    setRowSaveStateByGroup((prev) => ({
+      ...prev,
+      [group]: saveStateMap,
+    }));
+
+    updateGroupStatusLocally(group, mappedScores, studentsByGroup[group] || students);
+  };
 
   const handleLoadGroup = async (group: string) => {
-  if (!selectedClass || !group || !currentStation.id) {
-    return;
-  }
+    if (!selectedClass || !group || !currentStation.id) return;
 
-  setSelectedGroup(group);
-  setPage("entry");
-  setLoadingStudents(true);
-  setError("");
-  setMessage("");
+    setSelectedGroup(group);
+    setPage("entry");
+    setLoadingStudents(true);
+    setError("");
+    setMessage("");
 
-  try {
-    let fetchedStudents = studentsByGroup[group];
+    try {
+      let fetchedStudents = studentsByGroup[group];
 
-    if (!fetchedStudents) {
-      const data = await fetchJson(
-        `${API_BASE}?action=getGroupStudents&className=${encodeURIComponent(
-          selectedClass
-        )}&group=${encodeURIComponent(group)}`
-      );
+      if (!fetchedStudents) {
+        const data = await fetchJson(
+          `${API_BASE}?action=getGroupStudents&className=${encodeURIComponent(
+            selectedClass
+          )}&group=${encodeURIComponent(group)}`
+        );
 
-      fetchedStudents = Array.isArray(data.students) ? data.students : [];
+        fetchedStudents = Array.isArray(data.students) ? data.students : [];
 
-      setStudentsByGroup((prev) => ({
-        ...prev,
-        [group]: fetchedStudents!,
-      }));
+        setStudentsByGroup((prev) => ({
+          ...prev,
+          [group]: fetchedStudents!,
+        }));
+      }
+
+      setStudents(fetchedStudents || []);
+      await loadGroupScores(group);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load group");
+    } finally {
+      setLoadingStudents(false);
     }
-
-    setStudents(fetchedStudents || []);
-    await loadGroupScores(group);
-  } catch (err) {
-    setError(err instanceof Error ? err.message : "Unable to load group");
-  } finally {
-    setLoadingStudents(false);
-  }
-};
+  };
 
   const handleEntryBack = () => {
     if (hasPendingSaves) {
@@ -619,17 +675,25 @@ export default function App() {
         [selectedGroup]: clearedRowStates,
       }));
 
-      setGroupStatuses((prev) => ({
-        ...prev,
-        [selectedGroup]: "not-started",
-      }));
-
+      updateGroupStatusLocally(selectedGroup, clearedScores, students);
       setMessage(`${selectedGroup} cleared successfully`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Clear failed");
     } finally {
       setClearingGroup(false);
     }
+  };
+
+  const resetSessionForStationChange = (stationId: string) => {
+    setStation(stationId);
+    setSelectedClass("");
+    setSelectedGroup("");
+    setStudents([]);
+    setGroups([]);
+    setGroupStatuses({});
+    setMessage("");
+    setError("");
+    setPage("groups");
   };
 
   if (page === "login") {
@@ -690,13 +754,15 @@ export default function App() {
             <button
               key={s.id}
               onClick={() => {
-  setStation(s.id);
-  setSelectedClass("");
-  setSelectedGroup("");
-  setStudents([]);
-  setMessage("");
-  setError("");
-}}
+                setStation(s.id);
+                setSelectedClass("");
+                setSelectedGroup("");
+                setStudents([]);
+                setGroups([]);
+                setGroupStatuses({});
+                setMessage("");
+                setError("");
+              }}
               style={{
                 padding: "16px 18px",
                 borderRadius: 14,
@@ -785,6 +851,33 @@ export default function App() {
           </button>
         </div>
 
+        <div
+          style={{
+            marginBottom: 18,
+            display: "flex",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
+          {stations.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => resetSessionForStationChange(s.id)}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 12,
+                border: "1px solid #ccc",
+                background: station === s.id ? "#111" : "#fff",
+                color: station === s.id ? "#fff" : "#111",
+                cursor: "pointer",
+                fontSize: 14,
+              }}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
         {message && (
           <div
             style={{
@@ -825,6 +918,7 @@ export default function App() {
               onChange={(e) => {
                 setSelectedClass(e.target.value);
                 setSelectedGroup("");
+                setStudents([]);
                 setMessage("");
                 setError("");
               }}
@@ -1058,7 +1152,7 @@ export default function App() {
             <div
               style={{
                 display: "grid",
-                columnGap: 24,
+                columnGap: 32,
                 rowGap: 16,
                 gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
                 alignItems: "start",
@@ -1067,7 +1161,7 @@ export default function App() {
               <div>
                 <div style={{ marginBottom: 6, fontWeight: 700 }}>Attempt 1</div>
                 <input
-                  placeholder={currentValidation.placeholder}
+                  placeholder=""
                   value={rec.a1}
                   disabled={!!rec.absent}
                   inputMode={station === "shuttle" ? "decimal" : "numeric"}
@@ -1122,7 +1216,7 @@ export default function App() {
               <div>
                 <div style={{ marginBottom: 6, fontWeight: 700 }}>Attempt 2</div>
                 <input
-                  placeholder={currentValidation.placeholder}
+                  placeholder=""
                   value={rec.a2}
                   disabled={!!rec.absent}
                   inputMode={station === "shuttle" ? "decimal" : "numeric"}
