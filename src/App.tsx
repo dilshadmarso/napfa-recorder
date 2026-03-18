@@ -37,6 +37,99 @@ type ScoreRecord = {
 type GroupStatusValue = "not-started" | "in-progress" | "completed";
 type RowSaveState = "typing" | "saving" | "saved" | "error" | "";
 
+const ui = {
+  page: {
+    padding: 20,
+    fontFamily:
+      '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Arial, sans-serif',
+    maxWidth: 1100,
+    margin: "0 auto",
+    paddingBottom: 120,
+    background: "#f8fafc",
+    minHeight: "100vh",
+    boxSizing: "border-box" as const,
+  },
+  card: {
+    background: "#ffffff",
+    border: "1px solid #e2e8f0",
+    borderRadius: 20,
+    boxShadow: "0 4px 14px rgba(15, 23, 42, 0.06)",
+  },
+  sectionTitle: {
+    fontSize: 28,
+    fontWeight: 800,
+    margin: 0,
+    color: "#0f172a",
+  },
+  sectionSub: {
+    color: "#475569",
+    fontSize: 15,
+    marginTop: 6,
+  },
+  primaryButton: {
+    padding: "16px 20px",
+    cursor: "pointer",
+    borderRadius: 16,
+    border: "none",
+    background: "#0f172a",
+    color: "#fff",
+    fontSize: 17,
+    fontWeight: 700,
+    minHeight: 56,
+  },
+  secondaryButton: {
+    padding: "16px 20px",
+    cursor: "pointer",
+    borderRadius: 16,
+    border: "1px solid #cbd5e1",
+    background: "#fff",
+    color: "#0f172a",
+    fontSize: 17,
+    fontWeight: 700,
+    minHeight: 56,
+  },
+  dangerButton: {
+    padding: "16px 20px",
+    cursor: "pointer",
+    borderRadius: 16,
+    border: "1px solid #dc2626",
+    background: "#fff",
+    color: "#dc2626",
+    fontSize: 17,
+    fontWeight: 700,
+    minHeight: 56,
+  },
+  input: {
+    padding: "16px 18px",
+    width: "100%",
+    borderRadius: 14,
+    border: "1px solid #cbd5e1",
+    background: "#fff",
+    fontSize: 26,
+    minHeight: 72,
+    boxSizing: "border-box" as const,
+    outline: "none",
+  },
+  successBox: {
+    marginBottom: 16,
+    padding: 14,
+    borderRadius: 14,
+    background: "#ecfdf5",
+    border: "1px solid #86efac",
+    color: "#166534",
+    fontWeight: 600,
+  },
+  errorBox: {
+    marginBottom: 16,
+    padding: 14,
+    borderRadius: 14,
+    background: "#fef2f2",
+    border: "1px solid #fca5a5",
+    color: "#991b1b",
+    fontWeight: 600,
+  },
+};
+
 function formatValueForDisplay(value: number, stationId: string) {
   if (stationId === "shuttle") return value.toFixed(1);
   return String(value);
@@ -129,6 +222,8 @@ function getValidationConfig(stationId: string) {
   }
 }
 
+// Shuttle fix included:
+// allows 9, 9., 9.3, 12, 12., 12.4 while typing
 function sanitiseInput(value: string, stationId: string) {
   const raw = value.trim();
 
@@ -142,11 +237,16 @@ function sanitiseInput(value: string, stationId: string) {
         cleaned.slice(firstDot + 1).replace(/\./g, "");
     }
 
+    const hasDot = cleaned.includes(".");
     const parts = cleaned.split(".");
     const whole = (parts[0] || "").slice(0, 2);
     const decimal = (parts[1] || "").slice(0, 1);
 
-    return decimal !== "" ? `${whole}.${decimal}` : whole;
+    if (hasDot) {
+      return decimal !== "" ? `${whole}.${decimal}` : `${whole}.`;
+    }
+
+    return whole;
   }
 
   const digitsOnly = raw.replace(/\D/g, "");
@@ -159,7 +259,7 @@ function isValidValueForStation(value: string, stationId: string) {
   if (value === "") return true;
 
   if (stationId === "shuttle") {
-    return /^\d{1,2}(\.\d)?$/.test(value);
+    return /^\d{1,2}(\.\d?)?$/.test(value);
   }
 
   if (stationId === "broadjump") {
@@ -698,110 +798,87 @@ export default function App() {
 
   if (page === "login") {
     return (
-      <div
-        style={{
-          padding: 30,
-          fontFamily: "Arial, sans-serif",
-          maxWidth: 1000,
-          margin: "0 auto",
-        }}
-      >
-        <h1 style={{ marginBottom: 6 }}>NAPFA Station Recorder</h1>
-        <div style={{ color: "#666", marginBottom: 24 }}>Teacher session setup</div>
+      <div style={ui.page}>
+        <h1 style={ui.sectionTitle}>NAPFA Station Recorder</h1>
+        <div style={ui.sectionSub}>Teacher session setup</div>
 
-        {error && (
-          <div
-            style={{
-              marginBottom: 16,
-              padding: 14,
-              borderRadius: 12,
-              background: "#fef2f2",
-              border: "1px solid #fca5a5",
-              color: "#991b1b",
-            }}
-          >
-            {error}
-          </div>
-        )}
+        {error && <div style={ui.errorBox}>{error}</div>}
 
-        <h2>Teacher</h2>
-        <input
-          value={teacher}
-          onChange={(e) => {
-            setTeacher(e.target.value);
-            setError("");
-            setMessage("");
-          }}
-          style={{
-            padding: 12,
-            width: "100%",
-            maxWidth: 320,
-            borderRadius: 10,
-            border: "1px solid #ccc",
-            fontSize: 16,
-          }}
-        />
-
-        <h2 style={{ marginTop: 28 }}>Station</h2>
-        <div
-          style={{
-            display: "grid",
-            gap: 10,
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          }}
-        >
-          {stations.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => {
-                setStation(s.id);
-                setSelectedClass("");
-                setSelectedGroup("");
-                setStudents([]);
-                setGroups([]);
-                setGroupStatuses({});
-                setMessage("");
-                setError("");
-              }}
-              style={{
-                padding: "16px 18px",
-                borderRadius: 14,
-                border: "1px solid #ccc",
-                background: station === s.id ? "#111" : "#fff",
-                color: station === s.id ? "#fff" : "#111",
-                cursor: "pointer",
-                fontSize: 16,
-                textAlign: "left",
-              }}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-
-        <div style={{ marginTop: 28 }}>
-          <button
-            onClick={() => {
-              if (!teacher.trim()) {
-                setError("Please enter teacher name");
-                return;
-              }
+        <div style={{ ...ui.card, padding: 20, marginTop: 18 }}>
+          <h2 style={{ fontSize: 20, fontWeight: 800, marginTop: 0, marginBottom: 10 }}>Teacher</h2>
+          <input
+            value={teacher}
+            onChange={(e) => {
+              setTeacher(e.target.value);
               setError("");
               setMessage("");
-              setPage("groups");
             }}
             style={{
-              padding: "14px 20px",
-              cursor: "pointer",
-              borderRadius: 12,
-              border: "none",
-              background: "#111",
-              color: "#fff",
-              fontSize: 16,
+              ...ui.input,
+              maxWidth: 360,
+              fontSize: 20,
+              minHeight: 60,
+            }}
+          />
+
+          <h2 style={{ fontSize: 20, fontWeight: 800, marginTop: 26, marginBottom: 12 }}>
+            Station
+          </h2>
+          <div
+            style={{
+              display: "grid",
+              gap: 12,
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
             }}
           >
-            Start
-          </button>
+            {stations.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => {
+                  setStation(s.id);
+                  setSelectedClass("");
+                  setSelectedGroup("");
+                  setStudents([]);
+                  setGroups([]);
+                  setGroupStatuses({});
+                  setMessage("");
+                  setError("");
+                }}
+                style={{
+                  ...ui.card,
+                  padding: "18px 18px",
+                  borderRadius: 18,
+                  border: station === s.id ? "2px solid #0f172a" : "1px solid #cbd5e1",
+                  background: station === s.id ? "#0f172a" : "#ffffff",
+                  color: station === s.id ? "#ffffff" : "#0f172a",
+                  cursor: "pointer",
+                  fontSize: 18,
+                  fontWeight: 800,
+                  textAlign: "left",
+                  minHeight: 72,
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ marginTop: 22 }}>
+            <button
+              onClick={() => {
+                if (!teacher.trim()) {
+                  setError("Please enter teacher name");
+                  return;
+                }
+                setError("");
+                setMessage("");
+                setPage("groups");
+              }}
+              style={ui.primaryButton}
+            >
+              Start
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -809,14 +886,7 @@ export default function App() {
 
   if (page === "groups") {
     return (
-      <div
-        style={{
-          padding: 30,
-          fontFamily: "Arial, sans-serif",
-          maxWidth: 1000,
-          margin: "0 auto",
-        }}
-      >
+      <div style={ui.page}>
         <div
           style={{
             display: "flex",
@@ -827,8 +897,8 @@ export default function App() {
           }}
         >
           <div>
-            <h1 style={{ marginBottom: 6 }}>Select Group</h1>
-            <div style={{ color: "#666" }}>
+            <h1 style={ui.sectionTitle}>Select Group</h1>
+            <div style={ui.sectionSub}>
               Teacher: {teacher || "—"} • Station: {currentStation.label}
             </div>
           </div>
@@ -838,14 +908,7 @@ export default function App() {
               setError("");
               setPage("login");
             }}
-            style={{
-              padding: "12px 16px",
-              cursor: "pointer",
-              borderRadius: 12,
-              border: "1px solid #ccc",
-              background: "#fff",
-              fontSize: 15,
-            }}
+            style={ui.secondaryButton}
           >
             Back
           </button>
@@ -865,12 +928,13 @@ export default function App() {
               onClick={() => resetSessionForStationChange(s.id)}
               style={{
                 padding: "10px 14px",
-                borderRadius: 12,
-                border: "1px solid #ccc",
-                background: station === s.id ? "#111" : "#fff",
-                color: station === s.id ? "#fff" : "#111",
+                borderRadius: 999,
+                border: "1px solid #cbd5e1",
+                background: station === s.id ? "#0f172a" : "#fff",
+                color: station === s.id ? "#fff" : "#0f172a",
                 cursor: "pointer",
                 fontSize: 14,
+                fontWeight: 800,
               }}
             >
               {s.label}
@@ -878,38 +942,11 @@ export default function App() {
           ))}
         </div>
 
-        {message && (
-          <div
-            style={{
-              marginBottom: 16,
-              padding: 14,
-              borderRadius: 12,
-              background: "#ecfdf5",
-              border: "1px solid #86efac",
-              color: "#166534",
-            }}
-          >
-            {message}
-          </div>
-        )}
+        {message && <div style={ui.successBox}>{message}</div>}
+        {error && <div style={ui.errorBox}>{error}</div>}
 
-        {error && (
-          <div
-            style={{
-              marginBottom: 16,
-              padding: 14,
-              borderRadius: 12,
-              background: "#fef2f2",
-              border: "1px solid #fca5a5",
-              color: "#991b1b",
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ marginBottom: 8, fontWeight: 700 }}>Class</div>
+        <div style={{ ...ui.card, padding: 18, marginBottom: 18 }}>
+          <div style={{ marginBottom: 8, fontWeight: 800, fontSize: 16 }}>Class</div>
           {loadingClasses ? (
             <div>Loading classes...</div>
           ) : (
@@ -923,11 +960,11 @@ export default function App() {
                 setError("");
               }}
               style={{
-                padding: 12,
-                minWidth: 220,
-                borderRadius: 10,
-                border: "1px solid #ccc",
-                fontSize: 16,
+                ...ui.input,
+                minWidth: 240,
+                maxWidth: 300,
+                fontSize: 18,
+                minHeight: 58,
               }}
             >
               {classes.map((c) => (
@@ -945,7 +982,7 @@ export default function App() {
           <div
             style={{
               display: "grid",
-              gap: 12,
+              gap: 14,
               gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
             }}
           >
@@ -957,16 +994,23 @@ export default function App() {
                   key={g}
                   onClick={() => void handleLoadGroup(g)}
                   style={{
-                    padding: 18,
-                    borderRadius: 14,
+                    ...ui.card,
+                    padding: 20,
+                    borderRadius: 18,
                     cursor: "pointer",
                     textAlign: "left",
-                    ...style,
+                    border: style.border,
+                    background: style.background,
+                    minHeight: 120,
                   }}
                 >
-                  <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 6 }}>{g}</div>
-                  <div style={{ color: "#666", marginBottom: 10 }}>Tap to load this group</div>
-                  <div style={{ fontWeight: 700, color: style.labelColor }}>{style.label}</div>
+                  <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 8 }}>{g}</div>
+                  <div style={{ color: "#64748b", marginBottom: 12, fontSize: 15 }}>
+                    Tap to open this group
+                  </div>
+                  <div style={{ fontWeight: 800, color: style.labelColor, fontSize: 15 }}>
+                    {style.label}
+                  </div>
                 </button>
               );
             })}
@@ -977,15 +1021,7 @@ export default function App() {
   }
 
   return (
-    <div
-      style={{
-        padding: 30,
-        fontFamily: "Arial, sans-serif",
-        maxWidth: 1000,
-        margin: "0 auto",
-        paddingBottom: 100,
-      }}
-    >
+    <div style={ui.page}>
       <div
         style={{
           display: "flex",
@@ -996,63 +1032,36 @@ export default function App() {
         }}
       >
         <div>
-          <h1 style={{ marginBottom: 6 }}>Score Entry</h1>
-          <div style={{ color: "#666" }}>
+          <h1 style={ui.sectionTitle}>Score Entry</h1>
+          <div style={ui.sectionSub}>
             Teacher: {teacher || "—"} • Station: {currentStation.label} • Class: {selectedClass} •
             Group: {selectedGroup}
           </div>
         </div>
         <div
           style={{
-            padding: "10px 14px",
+            padding: "12px 16px",
             borderRadius: 999,
-            background: "#111",
+            background: "#0f172a",
             color: "#fff",
-            fontSize: 14,
+            fontSize: 15,
+            fontWeight: 800,
             whiteSpace: "nowrap",
+            boxShadow: "0 4px 10px rgba(15, 23, 42, 0.18)",
           }}
         >
           {loadingStudents ? "Opening group..." : `${completionCount} / ${students.length} completed`}
         </div>
       </div>
 
-      {message && (
-        <div
-          style={{
-            marginBottom: 16,
-            padding: 14,
-            borderRadius: 12,
-            background: "#ecfdf5",
-            border: "1px solid #86efac",
-            color: "#166534",
-          }}
-        >
-          {message}
-        </div>
-      )}
-
-      {error && (
-        <div
-          style={{
-            marginBottom: 16,
-            padding: 14,
-            borderRadius: 12,
-            background: "#fef2f2",
-            border: "1px solid #fca5a5",
-            color: "#991b1b",
-          }}
-        >
-          {error}
-        </div>
-      )}
+      {message && <div style={ui.successBox}>{message}</div>}
+      {error && <div style={ui.errorBox}>{error}</div>}
 
       {loadingStudents && (
         <div
           style={{
+            ...ui.card,
             padding: 16,
-            border: "1px solid #ccc",
-            borderRadius: 12,
-            background: "#fff",
             marginBottom: 16,
           }}
         >
@@ -1079,11 +1088,10 @@ export default function App() {
             key={s.id}
             id={`row-${s.id}`}
             style={{
-              border: "1px solid #ccc",
-              borderRadius: 14,
-              marginBottom: 14,
-              padding: 16,
-              background: "#fff",
+              ...ui.card,
+              borderRadius: 20,
+              marginBottom: 16,
+              padding: 18,
             }}
           >
             <div
@@ -1095,10 +1103,10 @@ export default function App() {
               }}
             >
               <div>
-                <div style={{ fontWeight: 700, fontSize: 18 }}>
+                <div style={{ fontWeight: 800, fontSize: 22, color: "#0f172a" }}>
                   {s.no}. {s.name}
                 </div>
-                <div style={{ color: "#666", marginBottom: 12 }}>
+                <div style={{ color: "#64748b", marginTop: 4, marginBottom: 14, fontSize: 15 }}>
                   {s.gender} • {s.group}
                 </div>
               </div>
@@ -1126,18 +1134,20 @@ export default function App() {
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                gap: 8,
-                marginBottom: 16,
-                padding: "8px 12px",
-                borderRadius: 10,
+                gap: 10,
+                marginBottom: 18,
+                padding: "10px 14px",
+                borderRadius: 14,
                 background: rec.absent ? "#fef2f2" : "#f8fafc",
                 border: rec.absent ? "1px solid #fca5a5" : "1px solid #e2e8f0",
+                fontSize: 15,
               }}
             >
               <input
                 type="checkbox"
                 checked={!!rec.absent}
                 onChange={(e) => handleAbsentToggle(s.id, e.target.checked)}
+                style={{ width: 20, height: 20 }}
               />
               <span
                 style={{
@@ -1152,14 +1162,16 @@ export default function App() {
             <div
               style={{
                 display: "grid",
-                columnGap: 32,
-                rowGap: 16,
-                gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                columnGap: 36,
+                rowGap: 18,
+                gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
                 alignItems: "start",
               }}
             >
               <div>
-                <div style={{ marginBottom: 6, fontWeight: 700 }}>Attempt 1</div>
+                <div style={{ marginBottom: 8, fontWeight: 800, fontSize: 15, color: "#0f172a" }}>
+                  Attempt 1
+                </div>
                 <input
                   placeholder=""
                   value={rec.a1}
@@ -1176,22 +1188,17 @@ export default function App() {
                   }}
                   onChange={(e) => handleAttemptChange(s.id, "a1", e.target.value)}
                   style={{
-                    padding: "16px 18px",
-                    width: "100%",
-                    borderRadius: 12,
+                    ...ui.input,
                     border: !a1Valid
                       ? "2px solid #dc2626"
                       : bestAttempt === 1 || bestAttempt === 3
                       ? "2px solid #16a34a"
-                      : "1px solid #ccc",
+                      : "1px solid #cbd5e1",
                     background: rec.absent
                       ? "#f3f4f6"
                       : bestAttempt === 1 || bestAttempt === 3
                       ? "#f0fdf4"
                       : "#fff",
-                    fontSize: 24,
-                    minHeight: 68,
-                    boxSizing: "border-box",
                   }}
                 />
                 {!a1Valid && !rec.absent && (
@@ -1214,7 +1221,9 @@ export default function App() {
               </div>
 
               <div>
-                <div style={{ marginBottom: 6, fontWeight: 700 }}>Attempt 2</div>
+                <div style={{ marginBottom: 8, fontWeight: 800, fontSize: 15, color: "#0f172a" }}>
+                  Attempt 2
+                </div>
                 <input
                   placeholder=""
                   value={rec.a2}
@@ -1233,22 +1242,17 @@ export default function App() {
                   }}
                   onChange={(e) => handleAttemptChange(s.id, "a2", e.target.value)}
                   style={{
-                    padding: "16px 18px",
-                    width: "100%",
-                    borderRadius: 12,
+                    ...ui.input,
                     border: !a2Valid
                       ? "2px solid #dc2626"
                       : bestAttempt === 2 || bestAttempt === 3
                       ? "2px solid #16a34a"
-                      : "1px solid #ccc",
+                      : "1px solid #cbd5e1",
                     background: rec.absent
                       ? "#f3f4f6"
                       : bestAttempt === 2 || bestAttempt === 3
                       ? "#f0fdf4"
                       : "#fff",
-                    fontSize: 24,
-                    minHeight: 68,
-                    boxSizing: "border-box",
                   }}
                 />
                 {!a2Valid && !rec.absent && (
@@ -1274,11 +1278,13 @@ export default function App() {
             <div
               style={{
                 marginTop: 14,
-                padding: 12,
-                borderRadius: 10,
+                padding: 14,
+                borderRadius: 14,
                 background: "#f8fafc",
-                fontWeight: 700,
+                fontWeight: 800,
+                fontSize: 16,
                 boxShadow: "inset 0 0 0 1px #e2e8f0",
+                color: "#0f172a",
               }}
             >
               Best Score: {rec.absent ? "Absent" : best ? `${best} ${currentStation.unit}` : "—"}
@@ -1291,8 +1297,10 @@ export default function App() {
         style={{
           position: "sticky",
           bottom: 0,
-          background: "#fff",
+          background: "rgba(248, 250, 252, 0.92)",
+          backdropFilter: "blur(10px)",
           paddingTop: 12,
+          paddingBottom: 8,
           display: "flex",
           gap: 12,
         }}
@@ -1300,12 +1308,7 @@ export default function App() {
         <button
           onClick={handleEntryBack}
           style={{
-            padding: "14px 18px",
-            cursor: "pointer",
-            borderRadius: 12,
-            border: "1px solid #ccc",
-            background: "#fff",
-            fontSize: 16,
+            ...ui.secondaryButton,
             flex: 1,
           }}
         >
@@ -1316,15 +1319,10 @@ export default function App() {
           onClick={() => void handleClearGroup()}
           disabled={!hasData || clearingGroup}
           style={{
-            padding: "14px 18px",
-            cursor: !hasData || clearingGroup ? "not-allowed" : "pointer",
-            borderRadius: 12,
-            border: "1px solid #dc2626",
-            background: "#fff",
-            color: "#dc2626",
-            fontSize: 16,
+            ...ui.dangerButton,
             flex: 1,
             opacity: !hasData || clearingGroup ? 0.6 : 1,
+            cursor: !hasData || clearingGroup ? "not-allowed" : "pointer",
           }}
         >
           {clearingGroup ? "Clearing..." : "Clear Group"}
