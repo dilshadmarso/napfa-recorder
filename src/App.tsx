@@ -98,7 +98,14 @@ function statusStyles(status: GroupStatus["status"]) {
 
 async function fetchJson(url: string, options: RequestInit = {}) {
   const response = await fetch(url, options);
-  const data = await response.json();
+  const text = await response.text();
+
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Non-JSON response from server: ${text.slice(0, 120)}`);
+  }
 
   if (!data.success) {
     throw new Error(data.message || "Request failed");
@@ -151,7 +158,7 @@ export default function App() {
         setError("");
 
         const data = await fetchJson(`${API_BASE}?action=getClasses`);
-        const nextClasses = data.classes || [];
+        const nextClasses = Array.isArray(data.classes) ? data.classes : [];
 
         setClasses(nextClasses);
 
@@ -160,7 +167,7 @@ export default function App() {
         }
       } catch (err) {
         console.error("Failed to load classes:", err);
-        setError("Failed to load classes");
+        setError(err instanceof Error ? err.message : "Failed to load classes");
       } finally {
         setLoadingClasses(false);
       }
@@ -181,7 +188,7 @@ export default function App() {
           `${API_BASE}?action=getGroups&className=${encodeURIComponent(selectedClass)}`
         );
 
-        const nextGroups = groupsData.groups || [];
+        const nextGroups = Array.isArray(groupsData.groups) ? groupsData.groups : [];
         setGroups(nextGroups);
 
         try {
@@ -192,9 +199,14 @@ export default function App() {
           );
 
           const map: Record<string, GroupStatus["status"]> = {};
-          (statusesData.statuses || []).forEach((item: GroupStatus) => {
-            map[item.group] = item.status;
+          const statuses = Array.isArray(statusesData.statuses) ? statusesData.statuses : [];
+
+          statuses.forEach((item: GroupStatus) => {
+            if (item?.group) {
+              map[item.group] = item.status;
+            }
           });
+
           setGroupStatuses(map);
         } catch (statusErr) {
           console.error("Failed to load group statuses:", statusErr);
@@ -209,9 +221,10 @@ export default function App() {
             )}&group=${encodeURIComponent(group)}`
           )
             .then((groupData) => {
+              const nextStudents = Array.isArray(groupData.students) ? groupData.students : [];
               setStudentsByGroup((prev) => {
                 if (prev[group]) return prev;
-                return { ...prev, [group]: groupData.students || [] };
+                return { ...prev, [group]: nextStudents };
               });
             })
             .catch((preloadErr) => {
@@ -220,7 +233,7 @@ export default function App() {
         });
       } catch (err) {
         console.error("Failed to load groups:", err);
-        setError("Failed to load groups");
+        setError(err instanceof Error ? err.message : "Failed to load groups");
       } finally {
         setLoadingGroups(false);
       }
@@ -373,7 +386,7 @@ export default function App() {
         )}&group=${encodeURIComponent(group)}`
       );
 
-      const fetchedStudents = data.students || [];
+      const fetchedStudents = Array.isArray(data.students) ? data.students : [];
       setStudentsByGroup((prev) => ({
         ...prev,
         [group]: fetchedStudents,
@@ -381,7 +394,7 @@ export default function App() {
       setStudents(fetchedStudents);
     } catch (err) {
       console.error("Failed to load students:", err);
-      setError("Unable to load students");
+      setError(err instanceof Error ? err.message : "Unable to load students");
     } finally {
       setLoadingStudents(false);
     }
@@ -532,7 +545,7 @@ export default function App() {
           </button>
         </div>
 
-        {submitMessage && (
+        {message && (
           <div
             style={{
               marginBottom: 16,
@@ -543,7 +556,7 @@ export default function App() {
               color: "#166534",
             }}
           >
-            {submitMessage}
+            {message}
           </div>
         )}
 
