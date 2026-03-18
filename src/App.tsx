@@ -395,19 +395,19 @@ export default function App() {
         ...prev,
         [groupKey]: "in-progress",
       }));
-    } catch (err) {
-      console.error("Save failed:", err);
+} catch (err) {
+  console.error("Save failed:", err);
 
-      setRowSaveStateByGroup((prev) => ({
-        ...prev,
-        [groupKey]: {
-          ...(prev[groupKey] || {}),
-          [studentId]: "error",
-        },
-      }));
+  setRowSaveStateByGroup((prev) => ({
+    ...prev,
+    [groupKey]: {
+      ...(prev[groupKey] || {}),
+      [studentId]: "error",
+    },
+  }));
 
-      setError("Save failed");
-    }
+  setError(err instanceof Error ? err.message : "Save failed");
+}
   };
 
   const handleAttemptChange = (studentId: string, key: "a1" | "a2", value: string) => {
@@ -601,7 +601,7 @@ export default function App() {
       setMessage(`${selectedGroup} cleared successfully`);
     } catch (err) {
       console.error("Clear failed:", err);
-      setError("Clear failed");
+      setError(err instanceof Error ? err.message : "Clear failed");
     } finally {
       setClearingGroup(false);
     }
