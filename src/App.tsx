@@ -784,17 +784,14 @@ export default function App() {
     }
   };
 
-  const resetSessionForStationChange = (stationId: string) => {
-    setStation(stationId);
-    setSelectedClass("");
-    setSelectedGroup("");
-    setStudents([]);
-    setGroups([]);
-    setGroupStatuses({});
-    setMessage("");
-    setError("");
-    setPage("groups");
-  };
+const resetSessionForStationChange = (stationId: string) => {
+  setStation(stationId);
+  setSelectedGroup("");
+  setStudents([]);
+  setMessage("");
+  setError("");
+  setPage("groups");
+};
 
   if (page === "login") {
     return (
